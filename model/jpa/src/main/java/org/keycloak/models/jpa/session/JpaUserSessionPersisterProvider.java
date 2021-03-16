@@ -37,14 +37,7 @@ import javax.persistence.EntityManager;
 import javax.persistence.Query;
 import javax.persistence.TypedQuery;
 
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.Comparator;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import javax.persistence.LockModeType;
@@ -240,50 +233,70 @@ public class JpaUserSessionPersisterProvider implements UserSessionPersisterProv
     }
 
     @Override
-    public List<UserSessionModel> loadUserSessions(int firstResult, int maxResults, boolean offline, int lastCreatedOn, String lastUserSessionId) {
+    public List<UserSessionModel> loadUserSessions(int firstResult, int maxResults, boolean offline, int lastCreatedOn, String previousUserSessionId) {
         String offlineStr = offlineToString(offline);
 
-        TypedQuery<PersistentUserSessionEntity> query = em.createNamedQuery("findUserSessions", PersistentUserSessionEntity.class);
-        query.setParameter("offline", offlineStr);
-        query.setParameter("lastCreatedOn", lastCreatedOn);
-        query.setParameter("lastSessionId", lastUserSessionId);
+        TypedQuery<PersistentUserSessionEntity> queryUserSessions = em.createNamedQuery("findUserSessionsOrderedById", PersistentUserSessionEntity.class);
+        queryUserSessions.setParameter("offline", offlineStr);
+        queryUserSessions.setParameter("previousSessionId", previousUserSessionId);
 
         if (firstResult != -1) {
-            query.setFirstResult(firstResult);
+            queryUserSessions.setFirstResult(firstResult);
         }
         if (maxResults != -1) {
-            query.setMaxResults(maxResults);
+            queryUserSessions.setMaxResults(maxResults);
         }
 
-        List<PersistentUserSessionAdapter> result = query.getResultStream()
+        List<PersistentUserSessionAdapter> userSessionAdapters = queryUserSessions.getResultStream()
                 .map(this::toAdapter)
                 .collect(Collectors.toList());
 
-        Map<String, PersistentUserSessionAdapter> sessionsById = result.stream()
-                .collect(Collectors.toMap(UserSessionModel::getId, Function.identity()));
-
-        Set<String> userSessionIds = sessionsById.keySet();
-
         Set<String> removedClientUUIDs = new HashSet<>();
 
-        if (!userSessionIds.isEmpty()) {
-            TypedQuery<PersistentClientSessionEntity> query2 = em.createNamedQuery("findClientSessionsByUserSessions", PersistentClientSessionEntity.class);
-            query2.setParameter("userSessionIds", userSessionIds);
-            query2.setParameter("offline", offlineStr);
-            List<PersistentClientSessionEntity> clientSessions = query2.getResultList();
+        if (!userSessionAdapters.isEmpty()) {
+            String lastUserSessionId = userSessionAdapters.get(userSessionAdapters.size() - 1).getId();
 
-            for (PersistentClientSessionEntity clientSession : clientSessions) {
-                PersistentUserSessionAdapter userSession = sessionsById.get(clientSession.getUserSessionId());
+            TypedQuery<PersistentClientSessionEntity> queryClientSessions = em.createNamedQuery("findClientSessionsOrderedById", PersistentClientSessionEntity.class);
+            queryClientSessions.setParameter("offline", offlineStr);
+            queryClientSessions.setParameter("previousSessionId", previousUserSessionId);
+            queryClientSessions.setParameter("lastSessionId", lastUserSessionId);
+            List<PersistentClientSessionEntity> clientSessions = queryClientSessions.getResultList();
 
-                PersistentAuthenticatedClientSessionAdapter clientSessAdapter = toAdapter(userSession.getRealm(), userSession, clientSession);
-                Map<String, AuthenticatedClientSessionModel> currentClientSessions = userSession.getAuthenticatedClientSessions();
+            Iterator<PersistentUserSessionAdapter> userSessionIterator = userSessionAdapters.iterator();
+            Iterator<PersistentClientSessionEntity> clientSessionIterator = clientSessions.iterator();
 
-                // Case when client was removed in the meantime
-                if (clientSessAdapter.getClient() == null) {
-                    removedClientUUIDs.add(clientSession.getClientId());
-                } else {
-                    currentClientSessions.put(clientSession.getClientId(), clientSessAdapter);
-                }
+            if (clientSessionIterator.hasNext()) {
+                PersistentUserSessionAdapter userSession = userSessionIterator.next();
+                PersistentClientSessionEntity clientSession = clientSessionIterator.next();
+
+                do {
+                    int diff = clientSession.getUserSessionId().compareTo(userSession.getId());
+
+                    if (diff > 0) {
+                        // client session id > user session id
+                        if (userSessionIterator.hasNext()) {
+                            userSession = userSessionIterator.next();
+                        } else {
+                            break;
+                        }
+                    } else {
+                        if (diff == 0) {
+                            // client session id < user session id
+                            // add client session to user session
+                            PersistentAuthenticatedClientSessionAdapter clientSessAdapter = toAdapter(userSession.getRealm(), userSession, clientSession);
+                            Map<String, AuthenticatedClientSessionModel> currentClientSessions = userSession.getAuthenticatedClientSessions();
+
+                            // Case when client was removed in the meantime
+                            if (clientSessAdapter.getClient() == null) {
+                                removedClientUUIDs.add(clientSession.getClientId());
+                            } else {
+                                currentClientSessions.put(clientSession.getClientId(), clientSessAdapter);
+                            }
+                        }
+
+                        clientSession = clientSessionIterator.next();
+                    }
+                } while (userSessionIterator.hasNext() && clientSessionIterator.hasNext());
             }
         }
 
@@ -291,7 +304,7 @@ public class JpaUserSessionPersisterProvider implements UserSessionPersisterProv
             onClientRemoved(clientUUID);
         }
 
-        return (List) result;
+        return (List) userSessionAdapters;
     }
 
     private PersistentUserSessionAdapter toAdapter(PersistentUserSessionEntity entity) {
