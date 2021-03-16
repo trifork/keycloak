@@ -70,7 +70,7 @@ public class JsonWebToken implements Serializable, Token {
     }
 
     public Long getExp() {
-        return exp;
+        return exp == null ? Long.valueOf(0) : exp;
     }
 
     /**
@@ -101,7 +101,7 @@ public class JsonWebToken implements Serializable, Token {
     }
 
     public Long getNbf() {
-        return nbf;
+        return nbf == null ? Long.valueOf(0) : nbf;
     }
 
     /**
