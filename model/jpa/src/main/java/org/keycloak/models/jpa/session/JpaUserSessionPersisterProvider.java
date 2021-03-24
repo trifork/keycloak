@@ -293,8 +293,11 @@ public class JpaUserSessionPersisterProvider implements UserSessionPersisterProv
                                 currentClientSessions.put(clientSession.getClientId(), clientSessAdapter);
                             }
                         }
-
-                        clientSession = clientSessionIterator.next();
+                        if (clientSessionIterator.hasNext()) {
+                            clientSession = clientSessionIterator.next();
+                        } else {
+                            break;
+                        }
                     }
                 } while (userSessionIterator.hasNext() && clientSessionIterator.hasNext());
             }
