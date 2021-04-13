@@ -139,26 +139,14 @@ public class JpaUserSessionPersisterProvider implements UserSessionPersisterProv
 
     @Override
     public void removeClientSession(String userSessionId, String clientUUID, boolean offline) {
-        String offlineStr = offlineToString(offline);
-        StorageId clientStorageId = new StorageId(clientUUID);
-        String clientId = PersistentClientSessionEntity.EXTERNAL;
-        String clientStorageProvider = PersistentClientSessionEntity.LOCAL;
-        String externalId = PersistentClientSessionEntity.LOCAL;
-        if (clientStorageId.isLocal()) {
-            clientId = clientUUID;
-        } else {
-            clientStorageProvider = clientStorageId.getProviderId();
-            externalId = clientStorageId.getExternalId();
-
-        }
-        PersistentClientSessionEntity sessionEntity = em.find(PersistentClientSessionEntity.class, new PersistentClientSessionEntity.Key(userSessionId, clientId, clientStorageProvider, externalId, offlineStr), LockModeType.PESSIMISTIC_WRITE);
+        PersistentClientSessionEntity sessionEntity = getPersistentClientSessionEntity(userSessionId, clientUUID, offline);
         if (sessionEntity != null) {
             em.remove(sessionEntity);
 
             // Remove userSession if it was last clientSession
             List<PersistentClientSessionEntity> clientSessions = getClientSessionsByUserSession(sessionEntity.getUserSessionId(), offline);
             if (clientSessions.size() == 0) {
-                offlineStr = offlineToString(offline);
+                String offlineStr = offlineToString(offline);
                 PersistentUserSessionEntity userSessionEntity = em.find(PersistentUserSessionEntity.class, new PersistentUserSessionEntity.Key(sessionEntity.getUserSessionId(), offlineStr), LockModeType.PESSIMISTIC_WRITE);
                 if (userSessionEntity != null) {
                     em.remove(userSessionEntity);
@@ -434,6 +422,14 @@ public class JpaUserSessionPersisterProvider implements UserSessionPersisterProv
     }
 
     private PersistentAuthenticatedClientSessionAdapter toAdapter(RealmModel realm, PersistentUserSessionAdapter userSession, PersistentClientSessionEntity entity) {
+        return toAdapter(realm, userSession, entity, userSession.getUserId());
+    }
+
+    private PersistentAuthenticatedClientSessionAdapter toAdapter(RealmModel realm, UserSessionModel userSession, PersistentClientSessionEntity entity) {
+        return toAdapter(realm, userSession, entity, userSession.getUser().getId());
+    }
+
+    private PersistentAuthenticatedClientSessionAdapter toAdapter(RealmModel realm, UserSessionModel userSession, PersistentClientSessionEntity entity, String userId) {
         String clientId = entity.getClientId();
         if (!entity.getExternalClientId().equals("local")) {
             clientId = new StorageId(entity.getClientId(), entity.getExternalClientId()).getId();
@@ -443,7 +439,7 @@ public class JpaUserSessionPersisterProvider implements UserSessionPersisterProv
         PersistentClientSessionModel model = new PersistentClientSessionModel();
         model.setClientId(clientId);
         model.setUserSessionId(userSession.getId());
-        model.setUserId(userSession.getUserId());
+        model.setUserId(userId);
         model.setTimestamp(entity.getTimestamp());
         model.setData(entity.getData());
         return new PersistentAuthenticatedClientSessionAdapter(session, model, realm, client, userSession);
@@ -477,6 +473,31 @@ public class JpaUserSessionPersisterProvider implements UserSessionPersisterProv
     @Override
     public void close() {
         // NOOP
+    }
+
+    @Override
+    public AuthenticatedClientSessionModel loadPersistentClientSession(UserSessionModel userSession, ClientModel client) {
+        PersistentClientSessionEntity persistentClientSessionEntity = getPersistentClientSessionEntity(userSession.getId(), client.getId(), true);
+
+        return persistentClientSessionEntity != null
+                ? toAdapter(client.getRealm(), userSession, persistentClientSessionEntity)
+                : null;
+    }
+
+    private PersistentClientSessionEntity getPersistentClientSessionEntity(String userSessionId, String clientUUID, boolean offline) {
+        String offlineStr = offlineToString(offline);
+        StorageId clientStorageId = new StorageId(clientUUID);
+        String clientId = PersistentClientSessionEntity.EXTERNAL;
+        String clientStorageProvider = PersistentClientSessionEntity.LOCAL;
+        String externalId = PersistentClientSessionEntity.LOCAL;
+        if (clientStorageId.isLocal()) {
+            clientId = clientUUID;
+        } else {
+            clientStorageProvider = clientStorageId.getProviderId();
+            externalId = clientStorageId.getExternalId();
+
+        }
+        return em.find(PersistentClientSessionEntity.class, new PersistentClientSessionEntity.Key(userSessionId, clientId, clientStorageProvider, externalId, offlineStr), LockModeType.PESSIMISTIC_WRITE);
     }
 
     private String offlineToString(boolean offline) {

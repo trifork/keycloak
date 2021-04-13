@@ -231,11 +231,11 @@ public class InfinispanUserSessionProvider implements UserSessionProvider {
 
         UserSessionAdapter adapter = wrap(realm, entity, false);
         adapter.setPersistenceState(persistenceState);
-        
+
         if (adapter != null) {
             DeviceActivityManager.attachDevice(adapter, session);
         }
-        
+
         return adapter;
     }
 
@@ -330,7 +330,7 @@ public class InfinispanUserSessionProvider implements UserSessionProvider {
     private UserSessionEntity getUserSessionEntity(RealmModel realm, String id, boolean offline) {
         InfinispanChangelogBasedTransaction<String, UserSessionEntity> tx = getTransaction(offline);
         SessionEntityWrapper<UserSessionEntity> entityWrapper = tx.get(id);
-        if (entityWrapper==null) return null;
+        if (entityWrapper == null) return null;
         UserSessionEntity entity = entityWrapper.getEntity();
         if (!entity.getRealmId().equals(realm.getId())) return null;
         return entity;
@@ -385,7 +385,29 @@ public class InfinispanUserSessionProvider implements UserSessionProvider {
     @Override
     public AuthenticatedClientSessionAdapter getClientSession(UserSessionModel userSession, ClientModel client, UUID clientSessionId, boolean offline) {
         AuthenticatedClientSessionEntity entity = getClientSessionEntity(clientSessionId, offline);
+
+        if (entity == null && offline) {
+            log.debugf("Offline client-session not found in infinispan, attempting UserSessionPersisterProvider lookup for sessionId=%s and client=%s", userSession.getId(), client.getClientId());
+            UserSessionPersisterProvider provider = session.getProvider(UserSessionPersisterProvider.class);
+            AuthenticatedClientSessionModel clientSession = provider.loadPersistentClientSession(userSession, client);
+
+            if (clientSession == null) {
+                log.debugf("Offline client-session not found in UserSessionPersisterProvider for sessionId=%s and client=%s", userSession.getId(), client.getClientId());
+                return null;
+            }
+
+            UserSessionAdapter userSessionAdapter = getUserSessionAdapter(userSession);
+
+            return importClientSession(userSessionAdapter, clientSession, getTransaction(true), getClientSessionTransaction(true), true);
+        }
+
         return wrap(userSession, client, entity, offline);
+    }
+
+    private UserSessionAdapter getUserSessionAdapter(UserSessionModel userSession) {
+        return userSession instanceof UserSessionAdapter
+                ? (UserSessionAdapter) userSession
+                : getOfflineUserSession(userSession.getRealm(), userSession.getId());
     }
 
     private AuthenticatedClientSessionEntity getClientSessionEntity(UUID id, boolean offline) {
@@ -529,7 +551,7 @@ public class InfinispanUserSessionProvider implements UserSessionProvider {
         return cache.entrySet().stream()
                 .filter(UserSessionPredicate.create(realm.getId()))
                 .map(Mappers.authClientSessionSetMapper())
-                .flatMap((Serializable & Function<Set<String>, Stream<? extends String>>)Mappers::toStream)
+                .flatMap((Serializable & Function<Set<String>, Stream<? extends String>>) Mappers::toStream)
                 .collect(
                         CacheCollectors.serializableCollector(
                                 () -> Collectors.groupingBy(Function.identity(), Collectors.counting())
@@ -537,7 +559,7 @@ public class InfinispanUserSessionProvider implements UserSessionProvider {
                 );
     }
 
-     protected long getUserSessionsCount(RealmModel realm, ClientModel client, boolean offline) {
+    protected long getUserSessionsCount(RealmModel realm, ClientModel client, boolean offline) {
 
         if (offline && loadOfflineSessionsStatsFromDatabase) {
             // fetch the actual offline user session count from the database
@@ -657,7 +679,7 @@ public class InfinispanUserSessionProvider implements UserSessionProvider {
     private LoginFailureEntity getLoginFailureEntity(LoginFailureKey key) {
         InfinispanChangelogBasedTransaction<LoginFailureKey, LoginFailureEntity> tx = getLoginFailuresTx();
         SessionEntityWrapper<LoginFailureEntity> entityWrapper = tx.get(key);
-        return entityWrapper==null ? null : entityWrapper.getEntity();
+        return entityWrapper == null ? null : entityWrapper.getEntity();
     }
 
     @Override
@@ -785,7 +807,7 @@ public class InfinispanUserSessionProvider implements UserSessionProvider {
     AuthenticatedClientSessionAdapter wrap(UserSessionModel userSession, ClientModel client, AuthenticatedClientSessionEntity entity, boolean offline) {
         InfinispanChangelogBasedTransaction<String, UserSessionEntity> userSessionUpdateTx = getTransaction(offline);
         InfinispanChangelogBasedTransaction<UUID, AuthenticatedClientSessionEntity> clientSessionUpdateTx = getClientSessionTransaction(offline);
-        return entity != null ? new AuthenticatedClientSessionAdapter(session,this, entity, client, userSession, clientSessionUpdateTx, offline) : null;
+        return entity != null ? new AuthenticatedClientSessionAdapter(session, this, entity, client, userSession, clientSessionUpdateTx, offline) : null;
     }
 
     UserLoginFailureModel wrap(LoginFailureKey key, LoginFailureEntity entity) {
@@ -1004,7 +1026,7 @@ public class InfinispanUserSessionProvider implements UserSessionProvider {
         if (userSession instanceof OfflineUserSessionModel) {
             // this is a hack so that UserModel doesn't have to be available when offline token is imported.
             // see related JIRA - KEYCLOAK-5350 and corresponding test
-            OfflineUserSessionModel oline = (OfflineUserSessionModel)userSession;
+            OfflineUserSessionModel oline = (OfflineUserSessionModel) userSession;
             entity.setUser(oline.getUserId());
             // NOTE: Hack
             // We skip calling entity.setLoginUsername(userSession.getLoginUsername())
@@ -1037,7 +1059,7 @@ public class InfinispanUserSessionProvider implements UserSessionProvider {
         SessionUpdateTask registerClientSessionTask = new RegisterClientSessionTask(clientSession.getClient().getId(), clientSessionId);
         userSessionUpdateTx.addTask(sessionToImportInto.getId(), registerClientSessionTask);
 
-        return new AuthenticatedClientSessionAdapter(session,this, entity, clientSession.getClient(), sessionToImportInto, clientSessionUpdateTx, offline);
+        return new AuthenticatedClientSessionAdapter(session, this, entity, clientSession.getClient(), sessionToImportInto, clientSessionUpdateTx, offline);
     }
 
 

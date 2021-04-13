@@ -159,4 +159,9 @@ public interface UserSessionPersisterProvider extends Provider {
      * @return
      */
     int removeUserSessions(RealmModel realm, Boolean offline);
+
+    default AuthenticatedClientSessionModel loadPersistentClientSession(UserSessionModel userSession, ClientModel client) {
+        return null;
+    }
+
 }
